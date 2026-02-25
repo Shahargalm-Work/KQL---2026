@@ -1,0 +1,58 @@
+Syslog
+| where HostName in~ ("F5Node1.BANKHADOAR.CO.IL","F5Node2.BANKHADOAR.CO.IL")
+| extend EventType = case(//    --- Event Classification ---
+    SyslogMessage has "ACCESS_SESSION_STARTED", "SessionStart",
+    SyslogMessage has "ACCESS_POLICY_COMPLETED", "AccessPolicyCompleted",
+    SyslogMessage has "HTTP_REQUEST_DATA","HTTPRequestData",
+    SyslogMessage has "AUDIT -", "Audit",
+    SyslogMessage has "CLIENTSSL_CLIENTCERT","ClientCertificateAuth",
+    SyslogMessage has_any ("AD Auth","Authentication"), "Authentication",
+    SyslogMessage has "<HTTP_REQUEST>", "HttpRequest",
+    SyslogMessage has "Session statistics", "SessionStats",
+    SyslogMessage has_any ("Information Leakage","Forceful Browsing","asm-policy"), "WAFViolation",
+    "Other"
+)
+| extend//      --- WAF Violations ---
+    WafViolationType = iff(EventType=="WAFViolation", extract("^\"([^\"]+)\"",1,SyslogMessage), ""),
+    WafAction = iff(EventType=="WAFViolation", extract("\"(block|allow)\"",1,SyslogMessage), ""),
+    PolicyName = iff(EventType=="WAFViolation", extract("\"(/Common/[^\"]+)\"",1,SyslogMessage), ""),
+    HttpMethod = iff(EventType=="WAFViolation", extract(@"\b(GET|POST|PUT|DELETE)\b",1,SyslogMessage), ""),
+    HttpPath = iff(EventType=="WAFViolation", extract(@"\b(?:GET|POST|PUT|DELETE)\s+([^\s]+)",1,SyslogMessage), ""),
+    HttpHost = iff(EventType=="WAFViolation",extract(@"HTTPHost:\s*([^\r\n]+)",1,SyslogMessage), ""),    
+    ClientIP = iff(EventType=="WAFViolation",extract(@"X-Forwarded-For:\s*([0-9a-fA-F\:\.]+)",1,SyslogMessage),""),
+    BackendIP = iff(EventType=="WAFViolation", extract(@"""(\d+\.\d+\.\d+\.\d+)""\s*,\s*""443""",1,SyslogMessage), ""),
+    ResponseCode = iff(EventType=="WAFViolation", extract("\"(404|403|401|500)\"",1,SyslogMessage), ""),
+    UserAgent = iff(EventType=="WAFViolation", extract(@"user-agent:\s*(.*?)\\r\\n",1,SyslogMessage), "")
+    | extend //     --- Authentication ---
+    RuleName = iff(EventType=="Authentication", extract(@"\/Common\/([^:]+)",1,SyslogMessage), ""),
+    SessionId = iff(EventType=="Authentication", extract(@":Common:([a-f0-9]+):",1,SyslogMessage), ""),
+    HttpStatus = iff(EventType=="Authentication", extract(@"HTTP\s+(\d+)",1,SyslogMessage), ""),
+    StartMode = iff(EventType=="Authentication", extract(@"Start\s+\(([^)]+)\)",1,SyslogMessage), ""),
+    AuthStage = iff(EventType=="Authentication", extract(@"AD Auth\s+\(([^)]+)\)",1,SyslogMessage), ""),
+    AuthOutcome = iff(EventType=="Authentication", extract(@"\|\s*(Allow|Deny)\s*\|",1,SyslogMessage), ""),
+    AdQueryResult = iff(EventType=="Authentication", extract(@"AD Query\s+([^|]+)",1,SyslogMessage), ""),
+    FinalDecision = iff(EventType=="Authentication", extract(@"Ending is:\s*([^ ]+)",1,SyslogMessage), "")
+    | extend//      --- Session Start ---
+    SessionRule = iff(EventType=="SessionStart", extract(@"Rule\s+([^ ]+)",1,SyslogMessage), ""),
+    SessionHmacSumValid = iff(EventType=="SessionStart", toint(extract(@"login_hmac_sum_check_result:\s*(\d)",1,SyslogMessage)), int(null)),
+    SessionHmacDateValid = iff(EventType=="SessionStart", toint(extract(@"login_hmac_date_check_result:\s*(\d)",1,SyslogMessage)), int(null))
+    | extend//      --- HTTP Requests ---
+    HttpHmacMatch = iff(EventType=="HttpRequest" and SyslogMessage has "HMAC match", true, bool(null)),
+    HttpHmacCalculated = iff(EventType=="HttpRequest", toint(extract(@"Login HMAC calculated\s+(\d)",1,SyslogMessage)), int(null)),
+    HttpHmacHex = iff(EventType=="HttpRequest", extract(@"encclock_login_hex1:\s*([a-fA-F0-9]+)",1,SyslogMessage), ""),
+    HttpHmacHeaderRaw = iff(EventType=="HttpRequest", extract(@"login_hmacheader_full:\s*(.+)$",1,SyslogMessage), ""),
+    HttpHmacHeaderTimestamp = iff(EventType=="HttpRequest", extract(@"login_hmacheader_full:\s*(\d+)",1,SyslogMessage), ""),
+    HttpHmacHeaderHash = iff(EventType=="HttpRequest", extract(@"login_hmacheader_full:\s*\d+\s+([a-fA-F0-9]+)",1,SyslogMessage), ""),
+    SessionID = iff(EventType=="HttpRequest", extract(@"Login HMAC value:\s*([a-f0-9]+)",1,SyslogMessage), "")
+    | extend//      --- Session Statistics ---
+    BytesIn = iff(EventType=="SessionStats", tolong(extract(@"bytes in:\s*(\d+)",1,SyslogMessage)), long(null)),
+    BytesOut = iff(EventType=="SessionStats", tolong(extract(@"bytes out:\s*(\d+)",1,SyslogMessage)), long(null)),
+    SessionEventLabel = iff(EventType=="SessionStats" and SyslogMessage has "Session statistics", "SessionStatistics", "")
+    | extend//      --- Client Certificate ---
+    ClientCertAccepted = iff(EventType == "ClientCertificateAuth" and SyslogMessage has "Client Accepted", true, bool(null)),
+    ClientCertIP = iff(EventType == "ClientCertificateAuth", extract(@"IP:([0-9\.]+)",1,SyslogMessage), ""),
+    ClientCertSerial = iff(EventType == "ClientCertificateAuth", extract(@"Serial:([A-Fa-f0-9:]+)",1,SyslogMessage), "")
+    | project-reorder TimeGenerated, EventTime, SourceSystem, Computer, HostName, EventType
+    | project-away _ResourceId, MG, TenantId
+
+

@@ -1,0 +1,30 @@
+Syslog
+| where HostName in~ ("guardium-coll-01","guardium-prd-cm")
+| extend EventType = case(
+    ProcessName == "snmpd", "LinuxSNMPError",
+    ProcessName == "sqlguard_sender_snmp", "GuardiumSNMPFailure",
+    ProcessName == "guard_sender_smtp", "GuardiumSMTPFailure",
+    ProcessName == "guard_sender_sysl", "GuardiumSyslogService",
+    ProcessName == "guard_sender_mntr", "GuardiumMonitorService",
+    ProcessName == "access-id", "GuardiumAccessService",
+    ProcessName == "nanny", "GuardiumNanny",
+    "GuardiumOther"
+)
+| extend
+SnmpHeaderMismatch = iff(EventType=="LinuxSNMPError" and SyslogMessage has "unexpected header length", true, false),
+SnmpHeaderActual = iff(EventType=="LinuxSNMPError", extract(@"!=\s*([0-9]+)",1,SyslogMessage), ""),
+SnmpHeaderExpected = iff(EventType=="LinuxSNMPError", extract(@"\.\s*([0-9]+)\s*!=",1,SyslogMessage), "")
+| extend
+SmtpNotConfigured = EventType=="GuardiumSMTPFailure" and SyslogMessage has "not specified"
+| extend
+LockFilePath = iff(SyslogMessage has "lock file", extract(@"(/[^ ]+)",1,SyslogMessage), ""),
+LockFileFailure = SyslogMessage has "Unable to open lock file"
+| extend
+GuardSenderStarted = SyslogMessage has "Guard Sender SYSLOG Started"
+| extend
+GuardSenderSnmpInitFailed = SyslogMessage has "Unable to initialize Guard Sender SNMP",
+GuardSenderSmtpInitFailed = SyslogMessage has "Unable to initialize guard_sender_smtp"
+| extend
+GuardSenderMonitorComplete = SyslogMessage has "Guard Sender Monitor Complete"
+    | project-reorder TimeGenerated, EventTime, SourceSystem, Computer, HostName, EventType
+    | project-away _ResourceId, MG, TenantId, Computer

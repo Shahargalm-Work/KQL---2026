@@ -1,0 +1,48 @@
+Syslog
+| where HostName == "ics-5000-a.israelpost.co.il"
+| extend EventType = case(
+    SyslogMessage has "SAML AuthnRequest generation", "IvantiSAML",
+    SyslogMessage has "SAML Consumer received", "IvantiSAMLConsumer",
+    SyslogMessage has "Added assertId__", "IvantiSAMLAssertion",
+    SyslogMessage has "SSL negotiation failed", "IvantiSSLFailure",
+    SyslogMessage has "Certificate" and SyslogMessage has "expired", "IvantiCertificate",
+    SyslogMessage has "Key Exchange number", "IvantiKeyExchange",
+    SyslogMessage has "Pre-authentication notification", "IvantiPreAuth",
+    SyslogMessage has "not authenticated yet","IvantiPreAuth",
+    SyslogMessage has "LMDB shards usage stats", "IvantiSystemStats",
+    "Other")
+| extend
+Timestamp = extract(@"^([0-9\-]+\s[0-9:]+)",1,SyslogMessage),
+Device = extract(@"\s-\s([^-]+)\s-\s\[[0-9\.]+\]",1,SyslogMessage),
+SourceIP = extract(@"\[([0-9\.]+)\]",1,SyslogMessage),
+Message = extract(@"\]\sSystem\(\)\[\]\[\]\s-\s(.+)",1,SyslogMessage),
+User = extract(@"\]\s([^@\(\[]+@[^(\[]+|[^\(\[]+)\(",1,SyslogMessage),
+Realm = extract(@"\(([^)]+)\)",1,SyslogMessage),
+SessionId = extract(@"\[([a-f0-9]{8,})\]",1,SyslogMessage)
+| extend
+SamlSigninUrl = iff(EventType=="IvantiSAML", extract(@"SigninUrl:'([^']+)'",1,SyslogMessage), ""),
+SamlSsoUrl = iff(EventType=="IvantiSAML", extract(@"SSO Service URL:\s*'([^']+)'",1,SyslogMessage), ""),
+SamlSucceeded = EventType=="IvantiSAML" and SyslogMessage has "succeeded"
+| extend
+SslClientIP = iff(EventType=="IvantiSSLFailure", extract(@"source IP '([^']+)'",1,SyslogMessage), ""),
+SslTargetIP = iff(EventType=="IvantiSSLFailure", extract(@"connect to '([^']+)'",1,SyslogMessage), ""),
+SslReason = iff(EventType=="IvantiSSLFailure", extract(@"Reason:\s*'([^']+)'",1,SyslogMessage), "")
+| extend
+CertName = iff(EventType=="IvantiCertificate", extract(@"Certificate '([^']+)'",1,SyslogMessage), ""),
+CertExpired = EventType=="IvantiCertificate" and SyslogMessage has "expired"
+| extend
+KeyExchangeNumber = iff(EventType=="IvantiKeyExchange", extract(@"Key Exchange number ([0-9]+)",1,SyslogMessage), ""),
+NCIP = iff(EventType=="IvantiKeyExchange", extract(@"NCIP ([0-9\.]+)",1,SyslogMessage), "")
+| extend
+PreAuthDeclined = EventType=="IvantiPreAuth" and SyslogMessage has "declined",
+PreAuthUser = iff(EventType=="IvantiPreAuth", extract(@"\]\s([^\(]+)\(",1,SyslogMessage), "")
+| extend
+SamlAssertionId = iff(EventType=="IvantiSAMLAssertion", extract(@"assertId__([a-f0-9\-]+)",1,SyslogMessage), ""),
+SamlAssertionType = iff(EventType=="IvantiSAMLAssertion", extract(@"'([^']+)'",1,SyslogMessage), "")
+| extend
+SamlResult = iff(EventType=="IvantiSAMLConsumer", extract(@"Result:([A-Z]+)",1,SyslogMessage), ""),
+SamlSuccess = EventType=="IvantiSAMLConsumer" and SyslogMessage has "SUCCESS"
+| extend
+ShardStatsRaw = iff(EventType=="IvantiSystemStats", extract(@"LMDB shards usage stats (.+)",1,SyslogMessage), "")
+| project-reorder TimeGenerated, EventTime, SourceSystem, Computer, HostName, EventType
+    | project-away _ResourceId, MG, TenantId
